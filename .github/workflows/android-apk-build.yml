@@ -9,33 +9,43 @@ on:
 
 jobs:
   build:
-    name: Build SceneSlate APK From Latest ZIP
-    runs-on: ubuntu-22.04
+    name: Build SceneSlate APK From Latest Version ZIP
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Select latest SceneSlate ZIP
+      - name: Select highest version SceneSlate ZIP
         run: |
-          echo "Repository files:"
-          ls -la
+          echo "Repository ZIP files:"
+          find . -maxdepth 1 -type f -iname "SceneSlate*.zip" -print
 
-          CHANGED_ZIP=$(git diff-tree --no-commit-id --name-only -r --root HEAD | grep -Ei 'SceneSlate.*\.zip$' | tail -n 1 || true)
+          python3 <<'PY'
+          import os, re, glob
 
-          if [ -n "$CHANGED_ZIP" ] && [ -f "$CHANGED_ZIP" ]; then
-            ZIP_FILE="$CHANGED_ZIP"
-          else
-            ZIP_FILE=$(find . -maxdepth 1 -type f -iname "SceneSlate*.zip" | sort -V | tail -n 1)
-          fi
+          files = glob.glob("SceneSlate*.zip")
+          if not files:
+              raise SystemExit("No SceneSlate ZIP file found.")
 
-          if [ -z "$ZIP_FILE" ]; then
-            echo "No SceneSlate ZIP file found."
-            exit 1
-          fi
+          def version_key(path):
+              name = os.path.basename(path)
+              # Examples:
+              # SceneSlate_v0_2_9_Project.zip
+              # SceneSlate_v0_2_10_Project.zip
+              # SceneSlate_v0_2_11_Project.zip
+              m = re.search(r'v(\d+)_(\d+)_(\d+)', name)
+              if not m:
+                  return (-1, -1, -1, name)
+              return (int(m.group(1)), int(m.group(2)), int(m.group(3)), name)
 
-          echo "Selected ZIP: $ZIP_FILE"
-          echo "ZIP_FILE=$ZIP_FILE" >> $GITHUB_ENV
+          selected = sorted(files, key=version_key)[-1]
+          print(f"Selected ZIP: ./{selected}")
+
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as f:
+              f.write(f"ZIP_FILE=./{selected}\n")
+              f.write(f"ZIP_BASENAME={os.path.splitext(os.path.basename(selected))[0]}\n")
+          PY
 
       - name: Unzip SceneSlate project
         run: |
@@ -56,6 +66,12 @@ jobs:
           PROJECT_DIR=$(dirname "$SETTINGS_FILE")
           echo "Project dir: $PROJECT_DIR"
           echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
+
+      - name: Show app version from Gradle
+        run: |
+          echo "Selected ZIP file: $ZIP_FILE"
+          echo "Gradle version info:"
+          grep -n "versionCode\|versionName" "$PROJECT_DIR/app/build.gradle.kts" || true
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -87,6 +103,6 @@ jobs:
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: SceneSlate-debug-apk
+          name: ${{ env.ZIP_BASENAME }}-debug-apk
           path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
